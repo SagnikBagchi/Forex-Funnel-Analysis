@@ -2,12 +2,16 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 
-# Page config
+# ----------------------------
+# ⚙️ PAGE CONFIG
+# ----------------------------
 st.set_page_config(page_title="Forex Funnel Analysis", layout="wide")
 
 st.title("📊 Forex Transaction Funnel Analysis (Real Data)")
 
-# Load data
+# ----------------------------
+# 📥 LOAD DATA
+# ----------------------------
 df = pd.read_csv("final_forex_dataset.csv")
 
 # ----------------------------
@@ -29,6 +33,7 @@ txn_amount = st.sidebar.multiselect(
     default=sorted(df["txn_amount"].unique())
 )
 
+# Apply filters
 filtered_df = df.copy()
 
 if customer_type != "All":
@@ -40,11 +45,19 @@ if channel != "All":
 filtered_df = filtered_df[filtered_df["txn_amount"].isin(txn_amount)]
 
 # ----------------------------
-# 📊 FUNNEL METRICS
+# 📊 FUNNEL CALCULATION
 # ----------------------------
 funnel = filtered_df.groupby("stage")["user_id"].nunique().reset_index()
 
-funnel = funnel.sort_values(by="stage")
+# 🛑 Handle empty case
+if funnel.empty:
+    st.error("No data available for selected filters. Try different combinations.")
+    st.stop()
+
+# Correct stage order
+stage_order = ["Initiated", "KYC Completed", "Completed"]
+funnel["stage"] = pd.Categorical(funnel["stage"], categories=stage_order, ordered=True)
+funnel = funnel.sort_values("stage")
 
 # Conversion %
 funnel["conversion_pct"] = (funnel["user_id"] / funnel.iloc[0]["user_id"]) * 100
@@ -52,15 +65,18 @@ funnel["conversion_pct"] = (funnel["user_id"] / funnel.iloc[0]["user_id"]) * 100
 # Drop-off
 funnel["drop_off"] = funnel["user_id"].shift(1) - funnel["user_id"]
 
-# KPIs
+# ----------------------------
+# 📊 KPIs
+# ----------------------------
 total_users = funnel.iloc[0]["user_id"]
 completed_users = funnel.iloc[-1]["user_id"]
 conversion_rate = round((completed_users / total_users) * 100, 2)
+drop_off_rate = 100 - conversion_rate
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Total Users", total_users)
-col2.metric("Completed Transactions", completed_users)
-col3.metric("Conversion Rate (%)", conversion_rate)
+col2.metric("Conversion Rate (%)", conversion_rate)
+col3.metric("Drop-off Rate (%)", drop_off_rate)
 
 # ----------------------------
 # 🔻 FUNNEL CHART
@@ -89,18 +105,18 @@ if max_drop_stage == "KYC Completed":
     st.warning("High friction at KYC → simplify onboarding or reduce documentation")
 
 elif max_drop_stage == "Initiated":
-    st.warning("Users dropping early → improve landing experience & clarity")
+    st.warning("Users drop early → improve landing experience & clarity")
 
 elif max_drop_stage == "Completed":
     st.warning("Final step failures → possible payment or system issues")
 
 if conversion_rate < 40:
-    st.error("🚨 Overall conversion is low → optimize funnel stages urgently")
+    st.error("🚨 Overall conversion is low → optimize funnel urgently")
 else:
     st.success("✅ Funnel performance looks healthy")
 
 # ----------------------------
-# 📊 CUSTOMER SEGMENT ANALYSIS
+# 👥 CUSTOMER SEGMENT ANALYSIS
 # ----------------------------
 st.subheader("👥 New vs Repeat User Behavior")
 
