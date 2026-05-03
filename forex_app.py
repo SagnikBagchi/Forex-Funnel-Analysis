@@ -29,7 +29,7 @@ def create_filter(column):
     return st.sidebar.multiselect(column, values, default=values)
 
 filters = {}
-for col in ["customer_type", "channel", "txn_amount"]:
+for col in ["Customer Typw", "Channel", "Transaction Amount"]:
     if col in df.columns:
         filters[col] = create_filter(col)
 
