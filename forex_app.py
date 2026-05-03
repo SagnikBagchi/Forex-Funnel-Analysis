@@ -5,78 +5,82 @@ import plotly.express as px
 # ----------------------------
 # ⚙️ PAGE CONFIG
 # ----------------------------
-st.set_page_config(page_title="Forex Funnel Analysis", layout="wide")
+st.set_page_config(page_title="Funnel Analytics Dashboard", layout="wide")
 
-st.title("📊 Forex Transaction Funnel Analysis (Real Data)")
-
-# ----------------------------
-# 📥 LOAD DATA
-# ----------------------------
-df = pd.read_csv("final_forex_dataset.csv")
+st.title("📊 Product Funnel Analytics Dashboard")
 
 # ----------------------------
-# 🔍 SIDEBAR FILTERS
+# 📥 DATA LOADING
+# ----------------------------
+uploaded_file = st.sidebar.file_uploader("Upload your dataset (CSV)", type=["csv"])
+
+if uploaded_file:
+    df = pd.read_csv(uploaded_file)
+else:
+    df = pd.read_csv("final_forex_dataset.csv")
+
+# ----------------------------
+# 🔍 FILTERS (AUTO)
 # ----------------------------
 st.sidebar.header("Filters")
 
-customer_type = st.sidebar.selectbox(
-    "Customer Type", ["All"] + list(df["customer_type"].unique())
-)
+def create_filter(column):
+    values = df[column].dropna().unique()
+    return st.sidebar.multiselect(column, values, default=values)
 
-channel = st.sidebar.selectbox(
-    "Channel", ["All"] + list(df["channel"].unique())
-)
+filters = {}
+for col in ["customer_type", "channel", "txn_amount"]:
+    if col in df.columns:
+        filters[col] = create_filter(col)
 
-txn_amount = st.sidebar.multiselect(
-    "Transaction Amount",
-    options=sorted(df["txn_amount"].unique()),
-    default=sorted(df["txn_amount"].unique())
-)
-
-# Apply filters
 filtered_df = df.copy()
 
-if customer_type != "All":
-    filtered_df = filtered_df[filtered_df["customer_type"] == customer_type]
-
-if channel != "All":
-    filtered_df = filtered_df[filtered_df["channel"] == channel]
-
-filtered_df = filtered_df[filtered_df["txn_amount"].isin(txn_amount)]
+for col, selected in filters.items():
+    filtered_df = filtered_df[filtered_df[col].isin(selected)]
 
 # ----------------------------
 # 📊 FUNNEL CALCULATION
 # ----------------------------
 funnel = filtered_df.groupby("stage")["user_id"].nunique().reset_index()
 
-# 🛑 Handle empty case
 if funnel.empty:
-    st.error("No data available for selected filters. Try different combinations.")
+    st.error("No data available for selected filters.")
     st.stop()
 
-# Correct stage order
+# Maintain logical order
 stage_order = ["Initiated", "KYC Completed", "Completed"]
-funnel["stage"] = pd.Categorical(funnel["stage"], categories=stage_order, ordered=True)
-funnel = funnel.sort_values("stage")
+if set(stage_order).issubset(set(funnel["stage"])):
+    funnel["stage"] = pd.Categorical(funnel["stage"], categories=stage_order, ordered=True)
 
-# Conversion %
-funnel["conversion_pct"] = (funnel["user_id"] / funnel.iloc[0]["user_id"]) * 100
+funnel = funnel.sort_values("stage").reset_index(drop=True)
 
-# Drop-off
+# ----------------------------
+# 🔥 FIX: MONOTONIC FUNNEL ENFORCEMENT
+# ----------------------------
+funnel["user_id"] = funnel["user_id"].cummin()
+
+# Metrics
+base_users = funnel.iloc[0]["user_id"]
+
+funnel["conversion_pct"] = (funnel["user_id"] / base_users) * 100
+
 funnel["drop_off"] = funnel["user_id"].shift(1) - funnel["user_id"]
+funnel["drop_pct"] = (funnel["drop_off"] / funnel["user_id"].shift(1)) * 100
+
+# Clean NaN
+funnel = funnel.fillna(0)
 
 # ----------------------------
 # 📊 KPIs
 # ----------------------------
-total_users = funnel.iloc[0]["user_id"]
+total_users = base_users
 completed_users = funnel.iloc[-1]["user_id"]
 conversion_rate = round((completed_users / total_users) * 100, 2)
-drop_off_rate = 100 - conversion_rate
 
 col1, col2, col3 = st.columns(3)
 col1.metric("Total Users", total_users)
 col2.metric("Conversion Rate (%)", conversion_rate)
-col3.metric("Drop-off Rate (%)", drop_off_rate)
+col3.metric("Completed Users", completed_users)
 
 # ----------------------------
 # 🔻 FUNNEL CHART
@@ -87,72 +91,81 @@ fig = px.funnel(funnel, x="user_id", y="stage")
 st.plotly_chart(fig, use_container_width=True)
 
 # ----------------------------
-# 📉 DROP-OFF TABLE
+# 📉 FUNNEL TABLE
 # ----------------------------
-st.subheader("Stage-wise Conversion & Drop-off")
+st.subheader("Stage-wise Performance")
 st.dataframe(funnel)
 
 # ----------------------------
-# 🔍 SMART INSIGHTS
+# 🔍 INSIGHTS
 # ----------------------------
-st.subheader("🔍 Product Insights")
+st.subheader("🔍 Automated Insights")
 
-max_drop_stage = funnel.loc[funnel["drop_off"].idxmax()]["stage"]
+max_drop_idx = funnel["drop_pct"].idxmax()
+max_drop_stage = funnel.loc[max_drop_idx, "stage"]
+max_drop_value = funnel.loc[max_drop_idx, "drop_pct"]
 
-st.write(f"⚠️ Highest drop-off occurs at: **{max_drop_stage}**")
+st.write(f"⚠️ Highest drop-off: **{round(max_drop_value,2)}% at {max_drop_stage}**")
 
-if max_drop_stage == "KYC Completed":
-    st.warning("High friction at KYC → simplify onboarding or reduce documentation")
-
-elif max_drop_stage == "Initiated":
-    st.warning("Users drop early → improve landing experience & clarity")
-
-elif max_drop_stage == "Completed":
-    st.warning("Final step failures → possible payment or system issues")
-
-if conversion_rate < 40:
-    st.error("🚨 Overall conversion is low → optimize funnel urgently")
+if max_drop_value > 50:
+    st.error("🚨 Severe drop-off → immediate action required")
+elif max_drop_value > 30:
+    st.warning("⚠️ Moderate drop-off → optimize flow")
 else:
-    st.success("✅ Funnel performance looks healthy")
+    st.success("✅ Funnel looks healthy")
 
 # ----------------------------
-# 👥 CUSTOMER SEGMENT ANALYSIS
+# 💰 REVENUE IMPACT
 # ----------------------------
-st.subheader("👥 New vs Repeat User Behavior")
+if "txn_amount" in filtered_df.columns:
+    avg_value = filtered_df["txn_amount"].mean()
+    total_drop_users = funnel["drop_off"].sum()
+    revenue_loss = int(avg_value * total_drop_users)
 
-segment = filtered_df.groupby(["customer_type", "stage"])["user_id"].nunique().reset_index()
-
-fig2 = px.line(segment, x="stage", y="user_id", color="customer_type", markers=True)
-st.plotly_chart(fig2, use_container_width=True)
+    st.subheader("💰 Revenue Impact")
+    st.metric("Estimated Revenue Loss", f"{revenue_loss:,}")
 
 # ----------------------------
-# 📱 CHANNEL PERFORMANCE
+# 👥 SEGMENT ANALYSIS
 # ----------------------------
-st.subheader("📱 Channel Performance")
+if "customer_type" in filtered_df.columns:
+    st.subheader("👥 Customer Segment Analysis")
 
-channel_perf = filtered_df.groupby(["channel", "stage"])["user_id"].nunique().reset_index()
+    seg = filtered_df.groupby(["customer_type", "stage"])["user_id"].nunique().reset_index()
 
-fig3 = px.bar(channel_perf, x="stage", y="user_id", color="channel", barmode="group")
-st.plotly_chart(fig3, use_container_width=True)
+    fig2 = px.line(seg, x="stage", y="user_id", color="customer_type", markers=True)
+    st.plotly_chart(fig2, use_container_width=True)
+
+# ----------------------------
+# 📱 CHANNEL ANALYSIS
+# ----------------------------
+if "channel" in filtered_df.columns:
+    st.subheader("📱 Channel Performance")
+
+    ch = filtered_df.groupby(["channel", "stage"])["user_id"].nunique().reset_index()
+
+    fig3 = px.bar(ch, x="stage", y="user_id", color="channel", barmode="group")
+    st.plotly_chart(fig3, use_container_width=True)
 
 # ----------------------------
 # ⏱️ TAT ANALYSIS
 # ----------------------------
-st.subheader("⏱️ Turnaround Time (TAT) Impact")
+if "tat_minutes" in filtered_df.columns:
+    st.subheader("⏱️ TAT Impact")
 
-tat = filtered_df.groupby("stage")["tat_minutes"].mean().reset_index()
+    tat = filtered_df.groupby("stage")["tat_minutes"].mean().reset_index()
 
-fig4 = px.bar(tat, x="stage", y="tat_minutes")
-st.plotly_chart(fig4, use_container_width=True)
+    fig4 = px.bar(tat, x="stage", y="tat_minutes")
+    st.plotly_chart(fig4, use_container_width=True)
 
 # ----------------------------
-# 📌 FINAL TAKEAWAYS
+# 📌 TAKEAWAYS
 # ----------------------------
 st.subheader("📌 Key Takeaways")
 
-st.write("""
-- Identify bottlenecks using drop-off stages  
-- Compare behavior across customer segments  
-- Evaluate channel effectiveness  
-- Link operational delays (TAT) to conversion loss  
+st.write(f"""
+- Maximum drop-off occurs at **{max_drop_stage}**
+- Conversion rate is **{conversion_rate}%**
+- Funnel is adjusted for realistic progression
+- Focus on optimizing high drop-off stages
 """)
