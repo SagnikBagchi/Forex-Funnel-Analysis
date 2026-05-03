@@ -6,7 +6,7 @@ st.set_page_config(page_title="Forex Funnel Analysis", layout="wide")
 
 st.title("📊 Forex Transaction Funnel Analysis")
 
-df = pd.read_csv("forex_data.csv")
+df = pd.read_csv("final_forex_dataset.csv")
 
 # Sidebar filters
 st.sidebar.header("Filters")
